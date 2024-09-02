@@ -38,10 +38,10 @@ class SongsService {
     return result.rows[0].id;
   }
 
-  async getSongs() {
+  async getSongs(title = '', performer = '') {
     const query = {
-      text: 'SELECT id, title, performer FROM songs',
-      values: [],
+      text: 'SELECT id, title, performer FROM songs WHERE title ILIKE $1 AND performer ILIKE $2',
+      values: [`%${title}%`, `%${performer}%`],
     };
 
     const result = await this._pool.query(query);
@@ -91,6 +91,16 @@ class SongsService {
     if (!result.rows.length) {
       throw new NotFoundError('Data songs gagal dihapus. Id tidak ditemukan');
     }
+  }
+
+  async getSongByAlbumId(albumId) {
+    const query = {
+      text: 'SELECT id, title, performer FROM songs WHERE "albumId" = $1',
+      values: [albumId],
+    };
+
+    const result = await this._pool.query(query);
+    return result.rows.map(mapDBToModel);
   }
 }
 
