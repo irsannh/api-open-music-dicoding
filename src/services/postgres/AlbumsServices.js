@@ -1,22 +1,25 @@
 const { Pool } = require('pg');
 const InvariantError = require('../../exceptions/InvariantError');
 const NotFoundError = require('../../exceptions/NotFoundError');
+const ClientError = require('../../exceptions/ClientError');
 const { mapDBToModel } = require('../../utils/albums');
 const { nanoid } = require('nanoid');
 
 class AlbumsService {
-  constructor() {
+  constructor(cacheService) {
     this._pool = new Pool();
+    this._cacheService = cacheService;
   }
 
   async addAlbum({ name, year }) {
     const id = `album-${nanoid(16)}`;
     const createdAt = new Date().toISOString();
     const updatedAt = createdAt;
+    const coverUrl = null;
 
     const query = {
-      text: 'INSERT INTO albums VALUES($1, $2, $3, $4, $5) RETURNING id',
-      values: [id, name, year, createdAt, updatedAt],
+      text: 'INSERT INTO albums VALUES($1, $2, $3, $4, $5, $6) RETURNING id',
+      values: [id, name, year, createdAt, updatedAt, coverUrl],
     };
 
     const result = await this._pool.query(query);
@@ -76,6 +79,93 @@ class AlbumsService {
     if (!result.rows.length) {
       throw new NotFoundError('Data album gagal dihapus. Id tidak ditemukan');
     }
+  }
+
+  async checkAlbum(id) {
+    const query = {
+      text: 'SELECT * FROM albums WHERE id = $1',
+      values: [id],
+    };
+
+    const result = await this._pool.query(query);
+
+    if (!result.rows.length) {
+      throw new NotFoundError('Album tidak ditemukan!');
+    }
+  }
+
+  async editAlbumToAddCoverById(id, fileLocation) {
+    const query = {
+      text: 'UPDATE albums SET cover_url = $1 WHERE id = $2',
+      values: [fileLocation, id],
+    };
+
+    await this._pool.query(query);
+  }
+
+  async addLikeAndDislikeAlbum(albumId, userId) {
+    const like = 'like';
+
+    const queryCheckForLike = {
+      text: 'SELECT id FROM user_album_likes WHERE user_id = $1 AND album_id = $2',
+      values: [userId, albumId],
+    };
+
+    const resultCheckForLike = await this._pool.query(queryCheckForLike);
+
+    if (resultCheckForLike.rows.length) {
+      throw new ClientError('Tidak dapat menambahkan like.');
+    } else {
+      const id = `album-like-${nanoid(16)}`;
+
+      const queryAddLike = {
+        text: 'INSERT INTO user_album_likes VALUES($1, $2, $3) RETURNING id',
+        values: [id, userId, albumId],
+      };
+
+      await this._pool.query(queryAddLike);
+      await this._cacheService.delete(`user_album_likes:${albumId}`);
+    }
+    await this._cacheService.delete(`user_album_likes:${albumId}`);
+    return like;
+  }
+
+  async getLikesAlbumById(id) {
+    try {
+      const source = 'cache';
+      const likes = await this._cacheService.get(`user_album_likes:${id}`);
+      return { likes: +likes, source };
+    } catch (error) {
+      await this.checkAlbum(id);
+
+      const query = {
+        text: 'SELECT * FROM user_album_likes WHERE album_id = $1',
+        values: [id],
+      };
+
+      const result = await this._pool.query(query);
+      const likes = result.rows.length;
+      await this._cacheService.set(`user_album_likes:${id}`, likes);
+      const source = 'server';
+      return { likes, source };
+    }
+  }
+
+  async unlikeAlbumById(albumId, userId) {
+    const query = {
+      text: 'SELECT id FROM user_album_likes WHERE user_id = $1 AND album_id = $2',
+      values: [userId, albumId],
+    };
+
+    const result = await this._pool.query(query);
+
+    const queryDeleteLike = {
+      text: 'DELETE FROM user_album_likes WHERE id = $1 RETURNING id',
+      values: [result.rows[0].id],
+    };
+
+    await this._pool.query(queryDeleteLike);
+    await this._cacheService.delete(`user_album_likes:${albumId}`);
   }
 }
 
